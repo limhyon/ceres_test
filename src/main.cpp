@@ -9,14 +9,18 @@ using namespace std;
 class ExtrinsicOptimizer : public ceres::CostFunction
 {
 public:
-  explicit ExtrinsicOptimizer(cv::Mat &K,cv::Mat &world,cv::Mat &x2d,int num_obs):num_obs_(num_obs)
+  explicit ExtrinsicOptimizer(cv::Mat &K,cv::Mat world,cv::Mat x2d)
   {
 	K.copyTo(K_);
 	world.copyTo(world_);	//! 3dpts.
-	set_num_residuals(2*num_obs);
-	mutable_parameter_block_sizes()->push_back(6);
-
 	x2d.copyTo(x2d_);
+
+	//cout << "world_ = \n" <<  world_ << endl;
+	//cout << "x2d_ = \n" <<  x2d_ << endl;
+	//cout << "K_ = \n" <<  K_ << endl;
+	
+	set_num_residuals(2);
+	mutable_parameter_block_sizes()->push_back(6);
 
 	fx = K_.at<double>(0,0);
 	fy = K_.at<double>(1,1);
@@ -28,6 +32,7 @@ public:
 			double **jacobians) const{
   	// parameters wx,wy,wz,tx,ty,tz;
 	// X Y Z
+	// will receive purturbated version of w,t,
 	double wx = parameters[0][0];
 	double wy = parameters[0][1];
 	double wz = parameters[0][2];
@@ -35,62 +40,81 @@ public:
 	double ty = parameters[0][4];
 	double tz = parameters[0][5];
 
-	cv::Mat R(3,3,CV_64F);
-	cv::Mat t(3,1,CV_64F);
 	cv::Mat P(3,4,CV_64F);
+	cv::Mat R(3,3,CV_64F);
 	cv::Mat w(3,1,CV_64F);
+	cv::Mat t(3,1,CV_64F);
 
 	w.at<double>(0,0) = wx;
 	w.at<double>(1,0) = wy;
 	w.at<double>(2,0) = wz;
 
 	t.at<double>(0,0) = tx;
-	w.at<double>(1,0) = ty;
-	w.at<double>(2,0) = tz;
+	t.at<double>(1,0) = ty;
+	t.at<double>(2,0) = tz;
+
+	//cout << "w = \n" << w << endl;
+	//cout << "t = \n" << t << endl;
 	
-	ceres::AngleAxisRotationMatrix((double*)w.ptr(),(double*)R.ptr());
+	//! convert angleAxis to Rotation
+	ceres::AngleAxisToRotationMatrix((double*)w.ptr(),(double*)R.ptr());
 
 	R.copyTo(P(cv::Range(0,3),cv::Range(0,3)));
         t.copyTo(P(cv::Range(0,3),cv::Range(3,4)));
 
 	P = K_*P;	//! projection matrix
 
-	for(int i=0;i<num_obs_;i++)
+	double X = world_.at<double>(0,0);
+	double Y = world_.at<double>(1,0);
+	double Z = world_.at<double>(2,0);
+
+		//! required parameters
+		//! X,Y,Z,wx,wy,wz,tx,ty,tz
+
+	cv::Mat image = P*world_;	
+
+	/// make dehomo
+    	image.at<double>(0,0) /= image.at<double>(2,0);
+        image.at<double>(1,0) /= image.at<double>(2,0);
+        image.at<double>(2,0) /= image.at<double>(2,0);
+
+	//cout << "image = \n" << image << endl;
+
+	//! Reprojection error computation
+	residuals[0] = x2d_.at<double>(0,0) - image.at<double>(0,0);
+	residuals[1] = x2d_.at<double>(1,0) - image.at<double>(1,0);
+
+	//cout << "resoduals[0] = " << residuals[0] << " residuals[1] = " << residuals[1] << endl;
+
+	if(jacobians != NULL)
 	{
-		double X = world_.at<double>(0,i);
-		double Y = world_.at<double>(1,i);
-		double Z = world_.at<double>(2,i);
+		jacobians[0][0] = JX0;
+		jacobians[0][1] = JX1;
+		jacobians[0][2] = JX2;
+		jacobians[0][3] = JX3;
+		jacobians[0][4] = JX4;
+		jacobians[0][5] = JX5;
 
-		cv::Mat image = P*world_.col(i);	
+		jacobians[0][6] = JY0;
+		jacobians[0][7] = JY1;
+		jacobians[0][8] = JY2;
+		jacobians[0][9] = JY3;
+		jacobians[0][10] = JY4;
+		jacobians[0][11] = JY5;
 
-		for(unsigned int j=0;j<N;j++)
-        	{
-     	           	image.at<double>(0,j) /= image.at<double>(2,j);
-        	        image.at<double>(1,j) /= image.at<double>(2,j);
-                	image.at<double>(2,j) /= image.at<double>(2,j);
-		}
+		for(int k=0;k<11;++k)
+			cout << jacobians[0][k] << " ";
+		cout << endl;
+	}		
 
-		residuals[i*2 + 0] = x2d_.at<double>(0,i) - image.at<double>(0,i);
-		residuals[i*2 + 1] = x2d_.at<double>(1,i) - image.at<double>(1,i);
-
-		jacobians[i*2 + 0][0] = JX0;
-		jacobians[i*2 + 0][1] = JX1;
-		jacobians[i*2 + 0][2] = JX2;
-		jacobians[i*2 + 0][3] = JX3;
-		jacobians[i*2 + 0][4] = JX4;
-		jacobians[i*2 + 0][5] = JX5;
-		jacobians[i*2 + 1][0] = JY0;
-		jacobians[i*2 + 1][1] = JY1;
-		jacobians[i*2 + 1][2] = JY2;
-		jacobians[i*2 + 1][3] = JY3;
-		jacobians[i*2 + 1][4] = JY4;
-		jacobians[i*2 + 1][5] = JY5;
-	}
+		//! Evaluate Jacobian
+#if 0
+#endif
+	return true;
   }
 private:
   int nums;
   double fx,fy,cx,cy;
-  int num_obs_;
   cv::Mat world_; //! 4xN world 3D point matrix.
   cv::Mat K_; //! intrinsic parameter
   cv::Mat x2d_; //! 2d image pts
@@ -157,19 +181,17 @@ int main(int argc, char** argv)
 
 	//! Prepare ground truth data
 	ceres::EulerAnglesToRotationMatrix((double*)Euler.ptr(),3,(double*)R.ptr());
-	cout << "Preparing ground truth R\n";
-	cout << R << endl;
+	//cout << "Preparing ground truth R\n";
+	//cout << R << endl;
 
 	//! R to angle axis
 	ceres::RotationMatrixToAngleAxis((double*)R.ptr(),(double*)w.ptr());
-	cout << "Ground truth angle axis\n";
-	cout << w << endl;
+	cout << "\nGround truth angle axis\n";
+	cout << w << endl << endl;
 
 	//! Project world image to image plane using P = K[R t]
-	cout << "Projection matrix\n";
 	R.copyTo(P(cv::Range(0,3),cv::Range(0,3)));
 	t.copyTo(P(cv::Range(0,3),cv::Range(3,4)));
-	cout << P << endl;
 
 	for(unsigned int i=0;i<N;i++)
 	{
@@ -188,21 +210,14 @@ int main(int argc, char** argv)
 		image.at<double>(2,i) /= image.at<double>(2,i);
 	}
 
-	/// random perturbation
-	for(unsigned int i=0;i<N;i++)
-	{
-		image.at<double>(0,i) += 0.2*randn();
-		image.at<double>(1,i) += 0.2*randn();
-		image.at<double>(2,i) += 0.2*randn();
-	}
+	/// Add purturbation to w,t
+	w.at<double>(0,0) += 0.2*randn();
+	w.at<double>(1,0) += 0.2*randn();
+	w.at<double>(2,0) += 0.2*randn();
 
-	w.at<double>(0,0) = 0.2*randn();
-	w.at<double>(1,0) = 0.2*randn();
-	w.at<double>(2,0) = 0.2*randn();
-
-	t.at<double>(0,0) = 0.2*randn();
-	t.at<double>(1,0) = 0.2*randn();
-	t.at<double>(2,0) = 0.2*randn();
+	t.at<double>(0,0) += 0.2*randn();
+	t.at<double>(1,0) += 0.2*randn();
+	t.at<double>(2,0) += 0.2*randn();
 
 	cv::Mat param(6,1,CV_64F);
 	param.at<double>(0,0) = w.at<double>(0,0);
@@ -212,7 +227,20 @@ int main(int argc, char** argv)
 	param.at<double>(4,0) = t.at<double>(1,0);
 	param.at<double>(5,0) = t.at<double>(2,0);
 	
+	cout << "Param(before) : \n" << param << endl;
 	ceres::Problem problem;
-	problem.AddResidualBlock(new ExtrinsicOptimizer(K,world,image,N),NULL,(double*)param.ptr());
+
+	for(int i=0;i<N;i++)
+		problem.AddResidualBlock(new ExtrinsicOptimizer(K,world.col(i),image.col(i)),NULL,(double*)param.ptr());
+	
+	ceres::Solver::Options options;
+	options.minimizer_progress_to_stdout = true;
+	
+	ceres::Solver::Summary summary;
+	ceres::Solve(options,&problem,&summary);
+	std::cout << summary.FullReport() << std::endl;
+
+	cout << "Param : \n" << param << endl;
+	
 	return 0;
 }
